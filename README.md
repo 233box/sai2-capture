@@ -1,4 +1,4 @@
-# sai2-capture
+# sai2-capture（请切换分支为master）
 sai2可用的窗口捕捉，绘画过程录制
 
 1.打开sai2的 窗口-分离操作面板-分离导航器面板   
