@@ -1,0 +1,377 @@
+import os
+import time
+import threading
+import tkinter as tk
+from tkinter import ttk, filedialog
+from PIL import Image, ImageChops
+import ctypes
+import imageio.v2 as imageio  # 使用 imageio.v2 模块
+import pickle
+import win32gui
+# 加载Windows API
+user32 = ctypes.windll.user32
+gdi32 = ctypes.windll.gdi32
+
+# 定义一些常量
+SRCCOPY = 0x00CC0020
+DIB_RGB_COLORS = 0
+
+# 定义结构体
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long)
+    ]
+
+class BITMAPINFOHEADER(ctypes.Structure):
+    _fields_ = [
+        ('biSize', ctypes.c_ulong),
+        ('biWidth', ctypes.c_long),
+        ('biHeight', ctypes.c_long),
+        ('biPlanes', ctypes.c_ushort),
+        ('biBitCount', ctypes.c_ushort),
+        ('biCompression', ctypes.c_ulong),
+        ('biSizeImage', ctypes.c_ulong),
+        ('biXPelsPerMeter', ctypes.c_long),
+        ('biYPelsPerMeter', ctypes.c_long),
+        ('biClrUsed', ctypes.c_ulong),
+        ('biClrImportant', ctypes.c_ulong)
+    ]
+
+class BITMAPINFO(ctypes.Structure):
+    _fields_ = [
+        ('bmiHeader', BITMAPINFOHEADER),
+        ('bmiColors', ctypes.c_ulong * 3)
+    ]
+
+def get_window_rect(hwnd):
+    rect = RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+
+def find_window_by_name(window_name):
+    hwnd = user32.FindWindowW(None, window_name)
+    if hwnd:
+        return hwnd
+    else:
+        raise Exception(f"无法找到名为 {window_name} 的窗口")
+
+def capture_window(hwnd, output_folder, frame_number, last_image, label_status, label_count, saved_count):
+    x, y, width, height = get_window_rect(hwnd)
+    
+    # 扩大窗口大小
+    width = int(width * 1.5)
+    height = int(height * 1.5)
+    height -= cut_window
+    
+    # 创建设备上下文
+    hdcScreen = user32.GetDC(0)
+    hdcMem = gdi32.CreateCompatibleDC(hdcScreen)
+    
+    # 创建位图
+    hbmScreen = gdi32.CreateCompatibleBitmap(hdcScreen, width, height)
+    gdi32.SelectObject(hdcMem, hbmScreen)
+    
+    # 复制窗口内容到位图
+    user32.PrintWindow(hwnd, hdcMem, 0)
+    
+    # 创建BITMAPINFO结构
+    bmi = BITMAPINFO()
+    bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+    bmi.bmiHeader.biWidth = width
+    bmi.bmiHeader.biHeight = -height  # 负值表示自上而下的位图
+    bmi.bmiHeader.biPlanes = 1
+    bmi.bmiHeader.biBitCount = 32
+    bmi.bmiHeader.biCompression = 0
+    
+    # 创建缓冲区
+    buffer_size = width * height * 4
+    buffer = (ctypes.c_ubyte * buffer_size)()
+    
+    # 获取位图数据
+    gdi32.GetDIBits(hdcScreen, hbmScreen, 0, height, buffer, ctypes.byref(bmi), DIB_RGB_COLORS)
+    
+    # 创建PIL图像
+    image = Image.frombuffer('RGBA', (width, height), buffer, 'raw', 'BGRA', 0, 1) # type: ignore
+    
+    # 去除透明通道，转换为RGB格式
+    image = image.convert('RGB')
+    
+    # 检查是否有新的笔迹
+    if last_image is None or ImageChops.difference(image, last_image).getbbox() is not None:
+        # 保存图像
+        filename = os.path.join(output_folder, f"frame_{frame_number}.png")
+        image.save(filename)
+        
+        # 更新状态标签和计数标签
+        label_status.config(text=f"帧 {frame_number} 已保存")
+        saved_count[0] += 1
+        label_count.config(text=f"已保存图像: {saved_count[0]}")
+    else:
+        label_status.config(text=f"帧 {frame_number} 没有变化")
+    
+    # 清理资源
+    gdi32.DeleteObject(hbmScreen)
+    gdi32.DeleteDC(hdcMem)
+    user32.ReleaseDC(0, hdcScreen)
+    
+    return image
+
+def start_capture(entry_window_name, combo_window_name, use_combo_var, entry_interval, label_status, label_count, button_start, button_pause):
+    global running, frame_number, output_folder, interval, hwnd, last_image, saved_count, first_start
+
+    if use_combo_var.get() == 1:  # 如果选择了使用下拉列表
+        window_name = combo_window_name.get().strip()
+    else:
+        window_name = entry_window_name.get().strip()
+    if not window_name or (use_combo_var.get() == 1 and window_name == "从列表选择或手动输入"):  # 检查是否有效窗口名
+        label_status.config(text="请输入窗口名称")
+        return
+    
+    try:
+        interval = float(entry_interval.get().strip())
+        if interval <= 0:
+            raise ValueError("时间间隔必须大于0")
+    except ValueError as e:
+        label_status.config(text=str(e))
+        return
+    
+    try:
+        hwnd = find_window_by_name(window_name)
+    except Exception as e:
+        label_status.config(text=str(e))
+        return
+    
+    if not first_start:
+        # 重新初始化
+        output_folder = create_output_folder()
+        last_image = None
+        frame_number = 0
+        saved_count = [0]  # 使用列表来保持引用
+        first_start = True
+    
+    running = True
+    button_start.config(state=tk.DISABLED)
+    button_pause.config(state=tk.NORMAL)
+    label_status.config(text="开始捕获")
+    
+    thread = threading.Thread(target=capture_loop, args=(label_status, label_count, saved_count))
+    thread.start()
+
+def pause_capture(label_status, button_start, button_pause):
+    global running
+    running = False
+    button_start.config(state=tk.NORMAL)
+    button_pause.config(state=tk.DISABLED)
+    label_status.config(text="捕获已暂停")
+
+def capture_loop(label_status, label_count, saved_count):
+    global running, frame_number, output_folder, last_image
+    while running:
+        try:
+            last_image = capture_window(hwnd, output_folder, frame_number, last_image, label_status, label_count, saved_count)
+            frame_number += 1
+            time.sleep(interval)
+        except Exception as e:
+            label_status.config(text=str(e))
+            time.sleep(1)  # 如果找不到导航器窗口，等待1秒后重试
+
+def create_output_folder():
+    timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    folder_name = f"output_{timestamp}"
+    output_folder = os.path.join("output_frames", folder_name)
+    os.makedirs(output_folder, exist_ok=True)
+    return output_folder
+
+def toggle_topmost():
+    global is_topmost
+    is_topmost = not is_topmost
+    root.attributes('-topmost', is_topmost)
+    if is_topmost:
+        button_toggle_topmost.config(text="取消置顶")
+    else:
+        button_toggle_topmost.config(text="置顶")
+
+def update_cut_window(event):
+    global cut_window
+    selected_value = combo_zoom.get()
+    if selected_value == "100%":
+        cut_window = 55
+    elif selected_value == "125%":
+        cut_window = 70
+    elif selected_value == "150%":
+        cut_window = 85
+    elif selected_value == "200%":
+        cut_window = 110
+
+def select_folder_and_create_video():
+    initial_dir = os.path.dirname(output_folder) if output_folder else os.getcwd()
+    folder_selected = filedialog.askdirectory(initialdir=initial_dir)
+    if folder_selected:
+        create_video_from_images(folder_selected)
+
+def generate_video_thread(image_paths, video_path, fps, label_status, total_images, root):
+    try:
+        with imageio.get_writer(video_path, format='FFMPEG', mode='I', fps=fps) as writer: # type: ignore
+            for i, image_path in enumerate(image_paths):
+                image = imageio.imread(image_path)
+                writer.append_data(image) # type: ignore
+                progress = (i + 1) / total_images * 100
+                # 使用 after 安全更新 GUI
+                root.after(0, label_status.config, {'text': f"生成视频: {progress:.2f}%"})
+        
+        root.after(0, label_status.config, {'text': f"视频已保存到 {video_path}"})
+    except Exception as e:
+        root.after(0, label_status.config, {'text': f"生成视频失败: {str(e)}"})
+        
+def create_video_from_images(folder_path):
+    images = sorted([f for f in os.listdir(folder_path) if f.endswith('.png')], key=lambda x: int(x.split('_')[1].split('.')[0]))
+    image_paths = [os.path.join(folder_path, img) for img in images]
+    if not image_paths:
+        label_status.config(text="没有找到图片文件")
+        return
+
+    try:
+        video_duration = float(entry_video_duration.get().strip())
+        if video_duration <= 0:
+            raise ValueError("视频时长必须大于0")
+    except ValueError as e:
+        label_status.config(text=str(e))
+        return
+
+    total_images = len(image_paths)
+    fps = total_images / video_duration
+    video_path = os.path.join(folder_path, "output.mp4")
+
+    # 启动后台线程执行耗时任务
+    thread = threading.Thread(
+        target=generate_video_thread,
+        args=(image_paths, video_path, fps, label_status, total_images, root)
+    )
+    thread.start()
+
+def load_settings():
+    settings_file = "settings.pkl"
+    if os.path.exists(settings_file):
+        with open(settings_file, "rb") as f:
+            settings = pickle.load(f)
+            window_name = settings.get("window_name", "导航器")
+            entry_window_name.delete(0, tk.END)
+            entry_window_name.insert(0, window_name)
+            combo_window_name.set(window_name)  # 同时设置 combo_window_name
+            combo_zoom.set(settings.get("zoom", "125%"))
+            entry_video_duration.delete(0, tk.END)
+            entry_video_duration.insert(0, str(settings.get("video_duration", 10)))
+            use_combo = settings.get("use_combo", 1)  # 获取是否使用下拉列表的设置，默认为1（使用）
+            use_combo_var.set(use_combo)
+
+def save_settings():
+    settings_file = "settings.pkl"
+    settings = {
+        "window_name": combo_window_name.get() or entry_window_name.get(),  # 优先使用 combo_window_name 的值
+        "interval": float(entry_interval.get()),
+        "zoom": combo_zoom.get(),
+        "video_duration": float(entry_video_duration.get()),
+        "use_combo": use_combo_var.get()  # 保存是否使用下拉列表的设置
+    }
+    with open(settings_file, "wb") as f:
+        pickle.dump(settings, f)
+
+# 获取所有窗口名称的函数
+def enum_window_titles():
+    titles = []
+    def callback(handle, lParam):
+        titles.append(win32gui.GetWindowText(handle))
+    win32gui.EnumWindows(callback, 0)
+    return [title for title in set(titles) if title]  # 去重并去除空标题
+
+# 全局变量
+running = False
+frame_number = 0
+interval = 0.1  # 默认时间间隔
+last_image = None  # 上一帧的图像
+is_topmost = False
+cut_window = 70
+first_start = False  # 标志是否是首次启动
+output_folder = ""
+
+# 创建主窗口
+root = tk.Tk()
+root.title("Sai2 捕获工具")
+root.geometry("800x350")  # 调整窗口大小
+
+# 在创建主窗口部分增加一个新的 Combobox 控件用于选择窗口名称
+titles = enum_window_titles()  # 获取所有窗口名称
+combo_window_name = ttk.Combobox(root, values=titles)
+combo_window_name.set("从列表选择或手动输入")  # 默认提示信息
+combo_window_name.grid(row=0, column=1, padx=10, pady=5, sticky="w")
+
+# 添加一个 IntVar 来存储 Checkbutton 的状态
+use_combo_var = tk.IntVar(value=1)  # 默认选中使用下拉列表
+
+# 创建 Checkbutton 控件
+check_use_combo = ttk.Checkbutton(root, text="使用下拉列表中的窗口", variable=use_combo_var)
+check_use_combo.grid(row=0, column=3, padx=10, pady=5, sticky="w")
+
+# 创建和布局控件
+label_window_name = ttk.Label(root, text="窗口名称:")
+label_window_name.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+
+entry_window_name = ttk.Entry(root, width=20)
+entry_window_name.insert(0, "导航器")  # 默认值
+# 修改 entry_window_name 的布局位置
+entry_window_name.grid(row=0, column=2, padx=10, pady=5, sticky="w")
+
+label_interval = ttk.Label(root, text="捕获时间间隔 (秒):")
+label_interval.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+
+entry_interval = ttk.Entry(root, width=20)
+entry_interval.insert(0, "0.1")  # 默认值
+entry_interval.grid(row=1, column=1, padx=10, pady=5, sticky="w")
+
+label_zoom = ttk.Label(root, text="缩放大小:")
+label_zoom.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+
+combo_zoom = ttk.Combobox(root, values=["100%", "125%", "150%", "200%"])
+combo_zoom.set("125%")  # 默认值
+combo_zoom.bind("<<ComboboxSelected>>", update_cut_window)
+combo_zoom.grid(row=2, column=1, padx=10, pady=5, sticky="w")
+
+label_video_duration = ttk.Label(root, text="视频时长 (秒):")
+label_video_duration.grid(row=3, column=0, padx=10, pady=5, sticky="w")
+
+entry_video_duration = ttk.Entry(root, width=20)
+entry_video_duration.insert(0, "10")  # 默认值
+entry_video_duration.grid(row=3, column=1, padx=10, pady=5, sticky="w")
+
+label_status = ttk.Label(root, text="状态: 未开始")
+label_status.grid(row=4, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+
+label_count = ttk.Label(root, text="已保存图像: 0")
+label_count.grid(row=5, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+
+# 设置按钮宽度
+button_width = 15
+
+button_start = ttk.Button(root, text="开始/继续", command=lambda: start_capture(entry_window_name, combo_window_name, use_combo_var,entry_interval, label_status, label_count, button_start, button_pause), width=button_width)
+button_start.grid(row=6, column=0, padx=10, pady=5, sticky="w")
+
+button_pause = ttk.Button(root, text="暂停", command=lambda: pause_capture(label_status, button_start, button_pause), state=tk.DISABLED, width=button_width)
+button_pause.grid(row=6, column=1, padx=10, pady=5, sticky="w")
+
+button_toggle_topmost = ttk.Button(root, text="置顶", command=toggle_topmost, width=button_width)
+button_toggle_topmost.grid(row=7, column=0, columnspan=2, padx=10, pady=5, sticky="w")
+
+button_create_video = ttk.Button(root, text="生成视频", command=select_folder_and_create_video, width=button_width)
+button_create_video.grid(row=7, column=1, columnspan=2, padx=10, pady=5, sticky="w")
+
+# 加载设置
+load_settings()
+
+# 绑定关闭事件
+root.protocol("WM_DELETE_WINDOW", lambda: (save_settings(), root.destroy()))
+
+# 运行主循环
+root.mainloop()
