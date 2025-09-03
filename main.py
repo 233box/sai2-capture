@@ -5,7 +5,7 @@ import video_creator  # 假设已创建的video_creator模块
 import settings_handler  # 假设已创建的settings_handler模块
 import window_utils
 import func
-
+    
 def main():
     global root
     root = tk.Tk()
@@ -56,6 +56,8 @@ def main():
     button_start.grid(row=6, column=0, padx=10, pady=5, sticky="w")
     button_pause = ttk.Button(root, text="暂停", command=lambda: capture.pause_capture(label_status, button_start, button_pause), state=tk.DISABLED, width=button_width)
     button_pause.grid(row=6, column=1, padx=10, pady=5, sticky="w")
+    button_stop = ttk.Button(root, text="停止录制", command=lambda: capture.stop_capture(button_start, button_pause, label_status), width=button_width)
+    button_stop.grid(row=6, column=2, padx=10, pady=5, sticky="w")  # 根据实际布局调整行号和列号
     button_toggle_topmost = ttk.Button(root, text="置顶", command=lambda: func.toggle_topmost(root,button_toggle_topmost), width=button_width)
     button_toggle_topmost.grid(row=7, column=0, columnspan=2, padx=10, pady=5, sticky="w")
     button_create_video = ttk.Button(root, text="生成视频", command=lambda: video_creator.select_folder_and_create_video(label_status, root, entry_video_duration), width=button_width)
@@ -66,7 +68,11 @@ def main():
 
     settings_handler.load_settings(entry_window_name, combo_window_name, use_combo_var, entry_interval, combo_zoom, entry_video_duration)
 
-    root.protocol("WM_DELETE_WINDOW", lambda: (settings_handler.save_settings(entry_window_name, combo_window_name, use_combo_var, entry_interval, combo_zoom, entry_video_duration), root.destroy()))
+    def on_closed():
+        settings_handler.save_settings(entry_window_name, combo_window_name, use_combo_var, entry_interval, combo_zoom, entry_video_duration)
+        capture.stop_capture(button_start, button_pause, label_status)
+        root.destroy()
+    root.protocol("WM_DELETE_WINDOW", on_closed)
 
 
     root.mainloop()

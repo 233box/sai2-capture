@@ -39,12 +39,19 @@ def start_capture(entry_window_name, combo_window_name, use_combo_var, entry_int
     if not state['first_start']:
         # 第一次启动时初始化
         output_folder = create_output_folder()
+        
+        # 创建视频文件路径
+        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+        video_path = os.path.join(output_folder, f"output_{timestamp}.mp4")
+        
         state.update({
             'output_folder': output_folder,
             'last_image': None,
             'frame_number': 0,
-            'saved_count': [0],  # 使用列表来保持引用
-            'first_start': True
+            'saved_count': [0],  # 用于统计写入视频的帧数
+            'first_start': True,
+            'video_writer': None,
+            'video_path': video_path
         })
     
     state['running'] = True
@@ -62,7 +69,21 @@ def pause_capture(label_status, button_start, button_pause):
     button_pause.config(state=tk.DISABLED)
     label_status.config(text="捕获已暂停")
 
-
+def stop_capture(button_start, button_pause, label_status):
+    state['running'] = False
+    button_pause.config(state=tk.DISABLED)
+    
+    # 释放视频写入器
+    video_writer = state.get('video_writer')
+    if video_writer is not None:
+        video_writer.release()
+        state['video_writer'] = None
+        label_status.config(text=f"捕获停止，视频已保存: {state['video_path']}")
+    else:
+        label_status.config(text="捕获停止")
+    
+    button_start.config(state=tk.NORMAL)
+    
 def capture_loop(label_status, label_count, saved_count):
     while state['running']:
         try:

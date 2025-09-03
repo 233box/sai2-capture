@@ -4,6 +4,8 @@ from PIL import Image, ImageChops
 import win32gui
 import os
 from share_state import state
+import cv2
+import numpy as np
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -104,15 +106,35 @@ def capture_window_content(hwnd):
     return image
 
 def save_if_modified(image, last_image, output_folder, frame_number, label_status, label_count, saved_count):
+    # 获取全局 video_writer（来自 state）
+    video_writer = state.get('video_writer')
+    
+    # 判断是否需要保存（变化或首帧）
     if last_image is None or ImageChops.difference(image, last_image).getbbox() is not None:
-        filename = os.path.join(output_folder, f"frame_{frame_number}.png")
-        image.save(filename)
-        label_status.config(text=f"帧 {frame_number} 已保存")
+        # 第一次写入时初始化 VideoWriter
+        if video_writer is None:
+            # 将 PIL 图像转为 OpenCV 格式以获取尺寸
+            cv_img = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+            height, width = cv_img.shape[:2]
+            
+            # 初始化视频写入器（MP4 格式，20 FPS）
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            video_writer = cv2.VideoWriter(state['video_path'], fourcc, 20.0, (width, height))
+            state['video_writer'] = video_writer  # 保存回 state
+            
+            label_status.config(text="视频写入器已启动")
+
+        # 转换图像格式并写入视频
+        cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        video_writer.write(cv_image)
+        
+        # 更新状态
+        label_status.config(text=f"帧 {frame_number} 已写入视频")
         saved_count[0] += 1
-        label_count.config(text=f"已保存图像: {saved_count[0]}")
+        label_count.config(text=f"已保存帧: {saved_count[0]}")
     else:
         label_status.config(text=f"帧 {frame_number} 没有变化")
-    
+
     return image
 
 # 在主程序或其他地方调用

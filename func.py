@@ -31,7 +31,8 @@ def toggle_topmost(root,button_toggle_topmost):
 
 def create_output_folder():
     timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-    folder_name = f"output_{timestamp}"
+    # folder_name = f"output_{timestamp}"
+    folder_name = ""
     output_folder = os.path.join("output_frames", folder_name)
     os.makedirs(output_folder, exist_ok=True)
     return output_folder
