@@ -6,7 +6,7 @@ from window_utils import find_window_by_name, capture_window
 from share_state import state
 import tkinter as tk
 from tkinter import filedialog
-from func import create_output_folder
+from func import create_output_folder, get_unique_video_path
 
 def start_capture(entry_window_name, combo_window_name, use_combo_var, entry_interval, label_status, label_count, button_start, button_pause):
     # 从 shared_state 获取状态
@@ -40,9 +40,8 @@ def start_capture(entry_window_name, combo_window_name, use_combo_var, entry_int
         # 第一次启动时初始化
         output_folder = create_output_folder()
         
-        # 创建视频文件路径
-        timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-        video_path = os.path.join(output_folder, f"output_{timestamp}.mp4")
+        # 👇 使用防重名函数
+        video_path = get_unique_video_path(output_folder, "output", ".mp4")
         
         state.update({
             'output_folder': output_folder,
@@ -78,9 +77,13 @@ def stop_capture(button_start, button_pause, label_status):
     if video_writer is not None:
         video_writer.release()
         state['video_writer'] = None
-        label_status.config(text=f"捕获停止，视频已保存: {state['video_path']}")
+        saved_path = state['video_path']
+        label_status.config(text=f"捕获停止，视频已保存: {saved_path}")
     else:
         label_status.config(text="捕获停止")
+    
+    # 👇 关键：重置 first_start，确保下次启动时生成新文件！
+    state['first_start'] = False
     
     button_start.config(state=tk.NORMAL)
     

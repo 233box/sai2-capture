@@ -6,6 +6,20 @@ from PIL import ImageTk, Image
 import win32gui
 import window_utils
 
+def get_unique_video_path(folder, base_name="output", ext=".mp4"):
+    """根据当前时间戳生成不重复的视频文件路径"""
+    timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
+    index = 0
+    while True:
+        if index == 0:
+            filename = f"{base_name}_{timestamp}{ext}"
+        else:
+            filename = f"{base_name}_{timestamp}_{index}{ext}"
+        path = os.path.join(folder, filename)
+        if not os.path.exists(path):
+            return path
+        index += 1
+
 def update_cut_window(event,combo_zoom):
     selected_value = combo_zoom.get()
     cut_window_ = 0

@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+.env
+
+# Output directories (customize if needed)
+output_frames/
+backup/
+
+# Serialized data / pickles
+*.pkl
+
+# IDE / Editor files (optional, add as needed)
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local config override (if you have local settings not to commit)
+settings_local.py
+
+# Logs and temporary files
+*.log
